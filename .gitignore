@@ -1,0 +1,60 @@
+# 忽略大型二进制文件
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+
+# 忽略Office临时文件
+~$*
+
+# 忽略操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# 忽略编辑器临时文件
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# 忽略Python相关文件（如果有的话）
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 忽略Node.js相关文件（如果有的话）
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 忽略环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 忽略日志文件
+*.log
+
+# 忽略临时文件
+*.tmp
+*.temp
