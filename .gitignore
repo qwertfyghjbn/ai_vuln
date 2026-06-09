@@ -55,9 +55,37 @@ yarn-error.log*
 # 忽略GitHub令牌文件
 .github_token
 
+# 忽略Office文档
+*.docx
+*.doc
+*.xlsx
+*.xls
+
+# 忽略data目录下的文件（保留目录结构）
+data/*
+!data/.gitkeep
+
 # 忽略日志文件
 *.log
 
 # 忽略临时文件
 *.tmp
 *.temp
+
+# 忽略克隆的仓库
+repos/
+
+# 忽略日志目录
+logs/
+
+# 忽略输出目录
+output/
+
+# 忽略状态目录
+state/
+
+# 忽略工作树目录
+worktrees/
+
+# 忽略Python缓存
+__pycache__/
