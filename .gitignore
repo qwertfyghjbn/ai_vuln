@@ -52,6 +52,9 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# 忽略GitHub令牌文件
+.github_token
+
 # 忽略日志文件
 *.log
 
