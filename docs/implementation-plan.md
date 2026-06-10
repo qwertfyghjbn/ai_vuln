@@ -217,12 +217,14 @@ langchain-ai_langchain
 
 | 情况 | 数据目录 |
 |------|----------|
-| 有 CVE | `cves/{project}/{cve_id}/` |
+| 有 CVE | 优先 `cves/{project}/{cve_id}/`，找不到时回退 `security_advisories/{project}/{cve_id}/` |
 | 只有 GHSA | `security_advisories/{project}/{adv_id}/` |
-| CVE 和 GHSA 都有 | 优先 `cves/{project}/{cve_id}/`，同时查找 `security_advisories/{project}/{adv_id}/` 作为补充 |
+| CVE 和 GHSA 都有 | 先按 CVE 查 `cves/{project}/{cve_id}/`，再回退 `security_advisories/{project}/{cve_id}/`，再查 `security_advisories/{project}/{adv_id}/` |
 | 同一 CVE 多来源 | 合并为一条任务，source 标记为 `both` |
 
-如果 CVE 目录缺失但 advisory 目录存在，应降级使用 advisory 目录，并将 `source_resolution` 写入 metadata。
+如果 CVE 目录缺失但 advisory 目录存在，应降级使用 advisory 目录。后续如需要审计解析来源，可再增加 `source_resolution` 写入 metadata；当前实现以 `CVE Dir`、`Advisory Dir`、`Primary Data Dir` 记录实际命中路径。
+
+注意：有些 CVE ID 目录会被数据包放在 `security_advisories` 下，resolver 必须支持跨来源目录回退，但不能跨 project 匹配。
 
 ## 6. RepoManager 设计
 

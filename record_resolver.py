@@ -11,29 +11,44 @@ class RecordResolver:
         self._project_dir_cache: dict[str, dict[str, str]] = {}
 
     def resolve(self, task: VulnerabilityTask) -> VulnerabilityTask:
-        cve_dir = None
-        advisory_dir = None
+        candidates = []
 
-        # Resolve CVE directory
         if task.cve_id:
-            cve_dir = self._find_dir("cves", task.project, task.cve_id)
+            candidates.append(("cve_dir", "cves", task.cve_id))
+            candidates.append(("cve_dir", "security_advisories", task.cve_id))
 
-        # Resolve advisory directory
         if task.adv_id:
-            advisory_dir = self._find_dir("security_advisories", task.project, task.adv_id)
+            candidates.append(("advisory_dir", "security_advisories", task.adv_id))
+            candidates.append(("advisory_dir", "cves", task.adv_id))
 
-        # Set directories
-        task.cve_dir = cve_dir
-        task.advisory_dir = advisory_dir
+        matched = []
+        attempted = []
 
-        # Determine primary data directory
+        for field_name, subdir, vuln_id in candidates:
+            attempted.append(f"{subdir}/{task.project}/{vuln_id}")
+            path = self._find_dir(subdir, task.project, vuln_id)
+            if path:
+                matched.append((field_name, subdir, vuln_id, path))
+
+        task.cve_dir = None
+        task.advisory_dir = None
+        task.primary_data_dir = None
+        task.fail_code = None
+        task.fail_reason = None
+
+        for field_name, _subdir, _vuln_id, path in matched:
+            if field_name == "cve_dir" and task.cve_dir is None:
+                task.cve_dir = path
+            elif field_name == "advisory_dir" and task.advisory_dir is None:
+                task.advisory_dir = path
+
         if task.cve_dir:
             task.primary_data_dir = task.cve_dir
         elif task.advisory_dir:
             task.primary_data_dir = task.advisory_dir
         else:
             task.fail_code = "FAIL_NO_VULN_DIR"
-            task.fail_reason = self._build_fail_reason(task)
+            task.fail_reason = self._build_fail_reason(task, attempted)
 
         return task
 
@@ -70,12 +85,14 @@ class RecordResolver:
 
         return None
 
-    def _build_fail_reason(self, task: VulnerabilityTask) -> str:
+    def _build_fail_reason(self, task: VulnerabilityTask, attempted: list[str] | None = None) -> str:
         parts = []
         if task.cve_id:
             parts.append(f"CVE dir not found for {task.cve_id}")
         if task.adv_id:
             parts.append(f"Advisory dir not found for {task.adv_id}")
+        if attempted:
+            parts.append("attempted: " + ", ".join(attempted))
         if not parts:
             parts.append("No directory paths configured")
         return "; ".join(parts)

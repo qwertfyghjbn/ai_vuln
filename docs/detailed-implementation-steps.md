@@ -313,10 +313,11 @@ Loaded tasks: 4992
 
 职责：
 
-1. 根据 task 找到 `cves/{project}/{cve_id}`。
-2. 根据 task 找到 `security_advisories/{project}/{adv_id}`。
-3. 决定 `primary_data_dir`。
-4. 标记缺失目录的失败原因。
+1. 根据 task 优先找到 `cves/{project}/{cve_id}`。
+2. 当 CVE 正常目录缺失时，回退查找 `security_advisories/{project}/{cve_id}`。
+3. 根据 task 查找 `security_advisories/{project}/{adv_id}`。
+4. 决定 `primary_data_dir`。
+5. 标记缺失目录的失败原因。
 
 建议接口：
 
@@ -331,9 +332,12 @@ class RecordResolver:
 
 ```python
 if task.cve_id:
-    cve_dir = data_root / "cves" / task.project / task.cve_id
+    try cves/{project}/{cve_id}
+    then try security_advisories/{project}/{cve_id}
+
 if task.adv_id:
-    advisory_dir = data_root / "security_advisories" / task.project / task.adv_id
+    try security_advisories/{project}/{adv_id}
+    optional fallback cves/{project}/{adv_id}
 
 if cve_dir exists:
     primary_data_dir = cve_dir
@@ -343,10 +347,12 @@ else:
     fail_code = "FAIL_NO_VULN_DIR"
 ```
 
+注意：有些 CVE ID 目录会被数据包放在 `security_advisories` 下，resolver 必须支持跨来源目录回退，但不能跨 project 匹配。
+
 禁止行为：
 
 1. 不要对 `project` 调用 `.lower()`。
-2. 不要把 GHSA-only 映射到 CVE 目录。
+2. 不要把 GHSA-only 强制映射到 CVE 目录；只有实际存在 `cves/{project}/{adv_id}` 时才可作为兜底。
 3. 不要因为 advisory_dir 缺失就否定 CVE 任务。
 
 ### 3.2 目录解析验收测试

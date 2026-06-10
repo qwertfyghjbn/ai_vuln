@@ -61,7 +61,7 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
 | 文件 | 职责 |
 |------|------|
 | `task_loader.py` | 从 Excel 文件读取任务列表。加载"汇总"sheet 的项目元数据，遍历每个项目 sheet 构建 `VulnerabilityTask` 对象 |
-| `record_resolver.py` | 将任务映射到数据目录。在 `data/ai-vulns-timeline/cves/` 或 `security_advisories/` 下查找匹配目录，支持大小写不敏感匹配 |
+| `record_resolver.py` | 将任务映射到数据目录。在 `cves/` 和 `security_advisories/` 下查找匹配目录，支持 CVE ID 跨来源回退和项目目录大小写不敏感匹配 |
 | `dataset_preparer.py` | 预检查数据就绪状态。检查 Excel 和 zip 文件是否存在，解压 zip，验证子目录结构 |
 | `evidence_builder.py` | 构建证据包。从数据目录加载 `timeline.json`、`relevance.json`、`one_issue.txt`、`root_cause.md`、`root_cause_zh.md`、`sast_standardized.json` |
 
@@ -429,9 +429,11 @@ data/ai-vulns-timeline/
 │               └── sast_standardized.json  # SAST 发现
 └── security_advisories/
     └── {project}/
-        └── {adv_id}/
+        └── {adv_id 或 cve_id}/
             └── ...（同上结构）
 ```
+
+`RecordResolver` 优先使用 `cves/{project}/{cve_id}`。如果该路径缺失，会回退到 `security_advisories/{project}/{cve_id}`，再尝试 `security_advisories/{project}/{adv_id}`。该回退只允许在同一个 project 下进行，不跨项目复用相同 CVE ID 的数据。
 
 ### 9.3 project-module-types.md
 
