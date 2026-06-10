@@ -52,7 +52,7 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | 主入口和 CLI 编排器。定义 10 个子命令，串联所有模块 |
+| `main.py` | 主入口和 CLI 编排器。定义 10 个子命令，串联所有模块。包含 `TaskRunResult` 数据类、`process_single_task()` 单任务处理函数、`finalize_task_result()` 主线程结果处理函数，支持 `--project-list` 过滤和 `--max-workers` 并行调度 |
 | `config.py` | 配置管理。从 `.env` 文件和环境变量加载 LLM 密钥、路径、模型参数 |
 | `models.py` | 数据模型。定义 `VulnerabilityTask`（任务身份）和 `VulnEvidence`（证据包）两个 dataclass |
 
@@ -101,7 +101,7 @@ python3 main.py <command> [options]
 | `dry-run` | 使用占位内容生成输出目录 | `--max` |
 | `build-evidence` | 为指定任务构建证据包 | `--project`, `--id` |
 | `collect-code` | 为指定任务收集代码证据 | `--project`, `--id` |
-| `run` | 运行完整分析流程 | `--max`, `--offline`, `--project`, `--id`, `--force` |
+| `run` | 运行完整分析流程 | `--max`, `--offline`, `--project`, `--id`, `--force`, `--project-list`, `--max-workers` |
 | `rebuild-summary` | 从输出文件重建 summary.csv | — |
 | `batch-report` | 生成批量统计报告 | — |
 | `audit-output` | 输出质量审计 | — |
@@ -124,13 +124,83 @@ python3 main.py run --max 5 --offline
 # 强制重跑已完成任务
 python3 main.py run --project AstrBotDevs_AstrBot --id CVE-2026-6117 --force
 
+# 按项目过滤（只处理指定项目）
+python3 main.py run --project-list AstrBotDevs_AstrBot,0xKoda_WireMCP --max 10
+
+# 并行执行（4 个 worker，不同项目并行，同项目串行）
+python3 main.py run --project-list AstrBotDevs_AstrBot,0xKoda_WireMCP --max-workers 4 --max 10
+
+# 并行 + 强制重跑
+python3 main.py run --project-list AstrBotDevs_AstrBot --max-workers 2 --max 5 --force
+
 # 重建汇总和报告
 python3 main.py rebuild-summary
 python3 main.py batch-report
 python3 main.py audit-output
 ```
 
-## 5. 输出目录结构
+## 5. 并行执行语义
+
+### 5.1 `--project-list` 任务过滤
+
+`--project-list` 接受逗号分隔的项目名白名单，精确匹配 Excel `project` 字段：
+
+```bash
+python3 main.py run --project-list AstrBotDevs_AstrBot,0xKoda_WireMCP
+```
+
+过滤顺序固定为：
+
+1. `--project-list`：按项目名白名单过滤
+2. `--project` + `--id`：单任务精确过滤（若提供）
+3. `--force` / `completed_keys`：是否跳过已完成任务
+4. `--max`：截断任务数
+
+校验规则：
+
+- `--project-list` 中有不存在的项目名 → 报错退出
+- `--project` 不在 `--project-list` 中 → 报错退出
+
+### 5.2 `--max-workers` 并行调度
+
+`--max-workers` 控制单进程内的并行 worker 数量（默认 1，即串行）：
+
+```bash
+python3 main.py run --max-workers 4 --project-list AstrBotDevs_AstrBot,0xKoda_WireMCP
+```
+
+并行调度规则：
+
+- **按 task 并行**：多个 task 可同时运行
+- **同 project 串行**：同一项目的多个 task 不会同时运行（避免 Git 仓库/worktree 冲突）
+- **不同 project 并行**：不同项目的 task 可以同时运行
+
+实现机制：
+
+- `TaskRunResult`：单任务处理结果数据类（`task`, `status`, `fail_code`, `fail_reason`）
+- `process_single_task(config, task)`：worker 函数，处理单个任务的证据收集、代码收集、分析，返回 `TaskRunResult`。不写全局状态文件
+- `finalize_task_result(config, state, writer, result, task_index, total)`：主线程函数，根据 `TaskRunResult` 写入 `progress.jsonl` 和 `summary.csv`
+- `ThreadPoolExecutor`：线程池执行器，`max_workers <= 1` 时走串行路径
+- `in_flight` dict：保证每个 project 最多 1 个 in-flight future
+
+### 5.3 并发写策略
+
+并行模式下的文件写入职责：
+
+| 文件 | 写入者 | 说明 |
+|------|--------|------|
+| `state/progress.jsonl` | 主线程 | 提交时写 `running`，完成时写 `success`/`failed` |
+| `output/summary.csv` | 主线程 | 任务完成后由 `finalize_task_result()` 追加 |
+| `output/batch_report.md` | 主线程 | 全部任务结束后统一生成 |
+| `output/{project}/{id}/*.md` | `process_single_task()` | task 私有目录，worker 直接写入 |
+
+### 5.4 约束
+
+- 仅支持**单个 `python3 main.py run` 进程内部**并行
+- 不支持多个 `run` 进程同时写同一个工作目录
+- 最终可信统计仍建议使用 `rebuild-summary` 重建
+
+## 6. 输出目录结构
 
 ```
 output/
@@ -149,7 +219,7 @@ output/
 └── preflight_report.md                           # 数据就绪检查报告
 ```
 
-## 6. 四步分析流程
+## 7. 四步分析流程
 
 ### Step 1：版本验证（Version Verification）
 
@@ -244,9 +314,9 @@ output/
 | Defensive Gap | 防御差距分析 |
 | Uncertainty | 不确定性和局限性 |
 
-## 7. 汇总文件字段说明
+## 8. 汇总文件字段说明
 
-### 7.1 summary.csv（30 个字段）
+### 8.1 summary.csv（30 个字段）
 
 **任务身份字段：**
 
@@ -303,7 +373,7 @@ output/
 | `fail_code` | 失败代码 |
 | `fail_reason` | 失败原因 |
 
-### 7.2 batch_report.md
+### 8.2 batch_report.md
 
 | 统计项 | 含义 |
 |--------|------|
@@ -319,7 +389,7 @@ output/
 | Category Distribution | A/B/C 类别分布 |
 | Module Distribution | 功能模块分布 |
 
-### 7.3 audit_report.md
+### 8.3 audit_report.md
 
 | 检查项 | 含义 |
 |--------|------|
@@ -331,16 +401,16 @@ output/
 | API Error Files | 包含 API 错误信息的文件列表 |
 | JSON Output Files | 输出为 JSON 而非 Markdown 的文件列表 |
 
-## 8. 输入数据说明
+## 9. 输入数据说明
 
-### 8.1 vuln-analyzed-0605.xlsx
+### 9.1 vuln-analyzed-0605.xlsx
 
 Excel 任务表，包含约 3,365 个漏洞任务。
 
 - **汇总 sheet**：项目元数据（项目名、GitHub URL、Owner、Repo）
 - **各项目 sheet**：漏洞列表，每行包含 `source`、`cve-id`、`adv-id`、`publish-at`、`cwe` 等字段
 
-### 8.2 ai-vulns-timeline.zip
+### 9.2 ai-vulns-timeline.zip
 
 解压后位于 `data/ai-vulns-timeline/`，按以下结构组织：
 
@@ -363,13 +433,13 @@ data/ai-vulns-timeline/
             └── ...（同上结构）
 ```
 
-### 8.3 project-module-types.md
+### 9.3 project-module-types.md
 
 功能模块分类体系文档，定义 18 类（A-R）功能模块和 8 种架构类型，作为 Step 2 分析的 LLM 上下文。
 
-## 9. 配置说明
+## 10. 配置说明
 
-### 9.1 .env 文件
+### 10.1 .env 文件
 
 ```env
 # LLM 供应商：none | anthropic | openai | deepseek | custom
@@ -381,11 +451,11 @@ DEEPSEEK_API_URL=https://api.deepseek.com/anthropic
 LLM_MODEL=deepseek-v4-pro
 LLM_MAX_TOKENS=4096
 
-# 可选：并行 worker 数（当前保留，仍按单线程执行）
+# 可选：并行 worker 数（默认 1，即串行；>1 时启用线程池并行）
 MAX_WORKERS=1
 ```
 
-### 9.2 支持的 LLM 供应商
+### 10.2 支持的 LLM 供应商
 
 | 供应商 | 说明 |
 |--------|------|
@@ -395,7 +465,7 @@ MAX_WORKERS=1
 | `deepseek` | DeepSeek API（Anthropic 兼容接口） |
 | `custom` | 自定义 OpenAI 兼容 API |
 
-## 10. 项目目录结构
+## 11. 项目目录结构
 
 ```
 ai_vuln/

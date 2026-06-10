@@ -1,7 +1,9 @@
 import argparse
 import logging
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from dataclasses import dataclass
 from pathlib import Path
 
 from config import Config
@@ -14,6 +16,107 @@ from evidence_builder import EvidenceBuilder
 from repo_manager import RepoManager
 from analyzer import Analyzer
 from markdown_parser import parse_task_output, parse_metadata
+
+
+def parse_project_list(raw: str | None) -> set[str] | None:
+    """Parse comma-separated project list string into a set."""
+    if not raw:
+        return None
+    items = [item.strip() for item in raw.split(",")]
+    result = {item for item in items if item}
+    return result or None
+
+
+@dataclass
+class TaskRunResult:
+    """Result of processing a single task."""
+    task: "VulnerabilityTask"
+    status: str  # success | failed
+    fail_code: str | None = None
+    fail_reason: str | None = None
+
+
+def process_single_task(config: Config, task: "VulnerabilityTask") -> TaskRunResult:
+    """Process a single vulnerability task. Worker-only: no state or summary writes."""
+    resolver = RecordResolver(config)
+    builder = EvidenceBuilder(config)
+    repo_manager = RepoManager(config)
+    writer = OutputWriter(config)
+    analyzer = Analyzer(config, writer)
+
+    try:
+        # Resolve directories
+        resolver.resolve(task)
+        writer.write_metadata(task)
+
+        if task.fail_code:
+            writer.write_failure(task)
+            return TaskRunResult(task, "failed", task.fail_code, task.fail_reason)
+
+        # Build evidence
+        evidence = builder.build(task)
+        writer.write_evidence_bundle(evidence)
+
+        # Collect code evidence (if not offline)
+        if not config.offline and evidence.intro_commit:
+            logging.info(f"Collecting code evidence for {task.task_key}")
+            print(f"  Collecting code evidence...")
+            repo_manager.collect_evidence(evidence)
+            writer.write_evidence_bundle(evidence)
+
+        # Run analysis
+        logging.info(f"Running analysis for {task.task_key}")
+        print(f"  Running analysis...")
+        analyzer.analyze(evidence)
+
+        return TaskRunResult(task, "success")
+
+    except Exception as e:
+        logging.exception(f"Unhandled error while processing {task.task_key}")
+
+        fail_code = task.fail_code or "FAIL_ANALYSIS_ERROR"
+        fail_reason = task.fail_reason or str(e)
+        task.fail_code = fail_code
+        task.fail_reason = fail_reason
+
+        # Best-effort failure metadata write for partial task runs.
+        try:
+            writer.write_failure(task)
+        except Exception:
+            logging.exception(f"Failed to write failure metadata for {task.task_key}")
+
+        return TaskRunResult(task, "failed", fail_code, fail_reason)
+
+
+def finalize_task_result(config, state, writer, result, task_index, total):
+    """Main-thread only: write state and summary after a task completes.
+
+    Returns "success" or "failed" for counting.
+    """
+    task = result.task
+    if result.status == "success":
+        # Update summary CSV with full fields
+        fields = parse_task_output(writer.task_dir(task))
+        fields.update({
+            "project": task.project,
+            "canonical_id": task.canonical_id,
+            "source": task.source,
+            "cwe": task.cwe,
+            "publish_at": task.publish_at,
+            "cve_id": task.cve_id,
+            "adv_id": task.adv_id,
+        })
+        writer.append_summary_csv(fields)
+
+        state.append_status(task, "success")
+        logging.info(f"Task completed: {task.task_key}")
+        print(f"✅ [{task_index}/{total}] {task.task_key} Done")
+        return "success"
+    else:
+        state.append_status(task, "failed", result.fail_code, result.fail_reason)
+        logging.warning(f"Task failed: {task.task_key} - {result.fail_code}")
+        print(f"❌ [{task_index}/{total}] {task.task_key} {result.fail_code}")
+        return "failed"
 
 
 def setup_logging(config: Config):
@@ -280,25 +383,41 @@ def cmd_collect_code(config: Config, project: str, vuln_id: str):
     print(f"\n   Output: {writer.task_dir(task)}/evidence_bundle.md")
 
 
-def cmd_run(config: Config, max_tasks: int | None = None, offline: bool = False, project: str | None = None, vuln_id: str | None = None, force: bool = False):
+def cmd_run(config: Config, max_tasks: int | None = None, offline: bool = False, project: str | None = None, vuln_id: str | None = None, force: bool = False, project_list: set[str] | None = None):
     """Run full analysis pipeline."""
     ensure_directories(config)
 
     if offline:
         config.offline = True
 
-    logging.info(f"Starting run: max_tasks={max_tasks}, offline={offline}, project={project}, id={vuln_id}, force={force}")
+    logging.info(f"Starting run: max_tasks={max_tasks}, offline={offline}, project={project}, id={vuln_id}, force={force}, project_list={project_list}")
 
     loader = TaskLoader(config)
-    resolver = RecordResolver(config)
-    builder = EvidenceBuilder(config)
-    repo_manager = RepoManager(config)
     state = StateManager(config)
     writer = OutputWriter(config)
-    analyzer = Analyzer(config, writer)
 
     tasks = loader.load_tasks()
     logging.info(f"Loaded {len(tasks)} tasks")
+
+    # Validate --project-list: error if --project is not in --project-list
+    if project_list and project and project not in project_list:
+        logging.error(f"--project '{project}' is not in --project-list {project_list}")
+        print(f"Error: --project '{project}' is not in --project-list. Valid projects: {project_list}")
+        sys.exit(1)
+
+    # Filter by --project-list if specified
+    if project_list:
+        all_projects = {t.project for t in tasks}
+        invalid_projects = project_list - all_projects
+        if invalid_projects:
+            logging.error(f"Invalid projects in --project-list: {invalid_projects}")
+            print(f"Error: Invalid projects in --project-list: {invalid_projects}")
+            sys.exit(1)
+        tasks = [t for t in tasks if t.project in project_list]
+        logging.info(f"After project-list filter: {len(tasks)} tasks remaining")
+        if not tasks:
+            print("No tasks remaining after --project-list filter.")
+            sys.exit(1)
 
     # Filter by project/id if specified
     if project and vuln_id:
@@ -321,64 +440,97 @@ def cmd_run(config: Config, max_tasks: int | None = None, offline: bool = False,
 
     success_count = 0
     fail_count = 0
+    total_tasks = len(tasks)
 
-    for i, task in enumerate(tasks):
-        logging.info(f"[{i+1}/{len(tasks)}] Processing {task.task_key}")
-        print(f"\n[{i+1}/{len(tasks)}] Processing {task.task_key}...")
-        state.append_status(task, "running")
+    if config.max_workers <= 1:
+        # Serial path
+        for i, task in enumerate(tasks):
+            logging.info(f"[{i+1}/{total_tasks}] Processing {task.task_key}")
+            print(f"\n[{i+1}/{total_tasks}] Processing {task.task_key}...")
+            state.append_status(task, "running")
 
-        # Resolve directories
-        resolver.resolve(task)
-        writer.write_metadata(task)
+            result = process_single_task(config, task)
 
-        if task.fail_code:
-            writer.write_failure(task)
-            state.append_status(task, "failed", task.fail_code, task.fail_reason)
-            fail_count += 1
-            logging.warning(f"Task failed: {task.task_key} - {task.fail_code}")
-            print(f"❌ {task.fail_code}")
-            continue
+            if finalize_task_result(config, state, writer, result, i + 1, total_tasks) == "success":
+                success_count += 1
+            else:
+                fail_count += 1
+    else:
+        # Parallel path: multi-project parallel, same-project serial
+        logging.info(f"Parallel mode: max_workers={config.max_workers}")
+        print(f"\nParallel mode: max_workers={config.max_workers}")
 
-        try:
-            # Build evidence
-            evidence = builder.build(task)
-            writer.write_evidence_bundle(evidence)
+        # Group tasks by project, preserving order
+        grouped: dict[str, list] = defaultdict(list)
+        for task in tasks:
+            grouped[task.project].append(task)
 
-            # Collect code evidence (if not offline)
-            if not config.offline and evidence.intro_commit:
-                logging.info(f"Collecting code evidence for {task.task_key}")
-                print(f"  Collecting code evidence...")
-                repo_manager.collect_evidence(evidence)
-                writer.write_evidence_bundle(evidence)
+        project_iter = iter(grouped.keys())
+        in_flight: dict[str, object] = {}  # project -> future
+        future_to_project: dict[object, str] = {}  # future -> project
+        future_to_task: dict[object, object] = {}  # future -> task
+        task_counter = 0
+        completed_counter = 0
 
-            # Run analysis
-            logging.info(f"Running analysis for {task.task_key}")
-            print(f"  Running analysis...")
-            result = analyzer.analyze(evidence)
+        def submit_next(project):
+            """Submit the next task for a project. Guarantees same-project serial."""
+            nonlocal task_counter
+            assert project not in in_flight, f"Project {project} already has an in-flight task"
+            if not grouped[project]:
+                return
+            task = grouped[project].pop(0)
+            task_counter += 1
+            in_flight_projects = list(in_flight.keys()) + [project]
+            logging.info(f"[{task_counter}/{total_tasks}] Submitting {task.task_key} (in_flight: {in_flight_projects})")
+            print(f"\n[{task_counter}/{total_tasks}] Submitting {task.task_key} (in_flight: {in_flight_projects})")
+            state.append_status(task, "running")
+            future = executor.submit(process_single_task, config, task)
+            in_flight[project] = future
+            future_to_project[future] = project
+            future_to_task[future] = task
 
-            # Update summary CSV with full fields
-            fields = parse_task_output(writer.task_dir(task))
-            fields.update({
-                "project": task.project,
-                "canonical_id": task.canonical_id,
-                "source": task.source,
-                "cwe": task.cwe,
-                "publish_at": task.publish_at,
-                "cve_id": task.cve_id,
-                "adv_id": task.adv_id,
-            })
-            writer.append_summary_csv(fields)
+        def try_fill_workers():
+            """Submit tasks for idle projects up to max_workers."""
+            # First: submit next tasks for projects that still have work but no in-flight future
+            for proj in list(grouped.keys()):
+                if len(in_flight) >= config.max_workers:
+                    return
+                if proj not in in_flight and grouped[proj]:
+                    submit_next(proj)
 
-            state.append_status(task, "success")
-            success_count += 1
-            logging.info(f"Task completed: {task.task_key}")
-            print(f"✅ Done")
+        with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+            # Submit initial tasks: one per project, up to max_workers
+            for proj in list(grouped.keys()):
+                if len(in_flight) >= config.max_workers:
+                    break
+                if grouped[proj]:
+                    submit_next(proj)
 
-        except Exception as e:
-            state.append_status(task, "failed", "FAIL_ANALYSIS_ERROR", str(e))
-            fail_count += 1
-            logging.error(f"Task error: {task.task_key} - {e}")
-            print(f"❌ Error: {e}")
+            while future_to_project:
+                # Wait for any future to complete
+                done, _ = wait(future_to_project.keys(), return_when=FIRST_COMPLETED)
+                for future in done:
+                    project = future_to_project.pop(future)
+                    task = future_to_task.pop(future)
+                    del in_flight[project]
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        logging.exception(f"Future crashed for {task.task_key}")
+                        result = TaskRunResult(task, "failed", "FAIL_WORKER_CRASH", str(e))
+
+                    remaining_in_flight = list(in_flight.keys())
+                    logging.info(f"[done] {result.task.task_key} from {project} (remaining in_flight: {remaining_in_flight})")
+                    print(f"[done] {result.task.task_key} from {project} (remaining in_flight: {remaining_in_flight})")
+                    completed_counter += 1
+
+                    if finalize_task_result(config, state, writer, result, completed_counter, total_tasks) == "success":
+                        success_count += 1
+                    else:
+                        fail_count += 1
+
+                # After finalizing, try to fill idle workers
+                try_fill_workers()
 
     # Generate batch report
     generate_batch_report(config)
@@ -739,10 +891,11 @@ def main():
     run_parser = subparsers.add_parser("run", help="Run full analysis")
     run_parser.add_argument("--max", type=int, help="Max tasks to process")
     run_parser.add_argument("--offline", action="store_true", help="Offline mode")
-    run_parser.add_argument("--max-workers", type=int, default=1, help="Max workers (当前保留，仍按单线程执行)")
+    run_parser.add_argument("--max-workers", type=int, default=1, help="Max workers for single-process parallel run")
     run_parser.add_argument("--project", help="Specific project to analyze")
     run_parser.add_argument("--id", help="Specific CVE/GHSA ID to analyze")
     run_parser.add_argument("--force", action="store_true", help="Force re-run completed tasks")
+    run_parser.add_argument("--project-list", help="Comma-separated project name whitelist")
 
     # Rebuild summary command
     rebuild_parser = subparsers.add_parser("rebuild-summary", help="Rebuild summary.csv")
@@ -779,6 +932,7 @@ def main():
     elif args.command == "collect-code":
         cmd_collect_code(config, args.project, args.id)
     elif args.command == "run":
+        project_list = parse_project_list(getattr(args, "project_list", None))
         cmd_run(
             config,
             max_tasks=getattr(args, "max", None),
@@ -786,6 +940,7 @@ def main():
             project=getattr(args, "project", None),
             vuln_id=getattr(args, "id", None),
             force=getattr(args, "force", False),
+            project_list=project_list,
         )
     elif args.command == "rebuild-summary":
         cmd_rebuild_summary(config)
