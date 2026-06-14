@@ -75,6 +75,9 @@ data/*
 # 忽略克隆的仓库
 repos/
 
+# 忽略运行结果比较目录
+compare_runs/
+
 # 忽略日志目录
 logs/
 

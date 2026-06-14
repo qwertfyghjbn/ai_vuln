@@ -48,6 +48,13 @@ class Config:
     llm_model: str = "deepseek-v4-pro"
     llm_max_tokens: int = 4096
 
+    # Agent analysis mode settings
+    analysis_mode: str = "prompt"  # prompt | agent
+    agent_backend: str = "claude_code_cli"  # claude_code_cli (v1 only)
+    agent_command: str = "claude"
+    agent_timeout_seconds: int = 1800
+    agent_permission_mode: str = "acceptEdits"  # acceptEdits | auto | default | dontAsk | plan
+
     def __post_init__(self):
         """Load settings from .env file."""
         env = load_dotenv(self.root_dir / ".env")
@@ -78,6 +85,18 @@ class Config:
         if "MAX_WORKERS" in env:
             self.max_workers = int(env["MAX_WORKERS"])
 
+        # Agent mode settings from .env
+        if "ANALYSIS_MODE" in env:
+            self.analysis_mode = env["ANALYSIS_MODE"]
+        if "AGENT_BACKEND" in env:
+            self.agent_backend = env["AGENT_BACKEND"]
+        if "AGENT_COMMAND" in env:
+            self.agent_command = env["AGENT_COMMAND"]
+        if "AGENT_TIMEOUT_SECONDS" in env:
+            self.agent_timeout_seconds = int(env["AGENT_TIMEOUT_SECONDS"])
+        if "AGENT_PERMISSION_MODE" in env:
+            self.agent_permission_mode = env["AGENT_PERMISSION_MODE"]
+
         # Also check environment variables (higher priority)
         if os.environ.get("LLM_PROVIDER"):
             self.llm_provider = os.environ["LLM_PROVIDER"]
@@ -85,3 +104,26 @@ class Config:
             self.deepseek_api_key = os.environ["DEEPSEEK_API_KEY"]
         if os.environ.get("DEEPSEEK_API_URL"):
             self.deepseek_api_url = os.environ["DEEPSEEK_API_URL"]
+
+        # Agent mode settings from environment variables (higher priority)
+        if os.environ.get("ANALYSIS_MODE"):
+            self.analysis_mode = os.environ["ANALYSIS_MODE"]
+        if os.environ.get("AGENT_BACKEND"):
+            self.agent_backend = os.environ["AGENT_BACKEND"]
+        if os.environ.get("AGENT_COMMAND"):
+            self.agent_command = os.environ["AGENT_COMMAND"]
+        if os.environ.get("AGENT_TIMEOUT_SECONDS"):
+            self.agent_timeout_seconds = int(os.environ["AGENT_TIMEOUT_SECONDS"])
+        if os.environ.get("AGENT_PERMISSION_MODE"):
+            self.agent_permission_mode = os.environ["AGENT_PERMISSION_MODE"]
+
+        # Validate agent mode settings
+        if self.analysis_mode not in ("prompt", "agent"):
+            raise ValueError(f"Invalid analysis_mode: {self.analysis_mode}. Must be 'prompt' or 'agent'.")
+        if self.analysis_mode == "agent" and self.agent_backend != "claude_code_cli":
+            raise ValueError(f"Unsupported agent backend: {self.agent_backend}")
+        valid_permission_modes = ("acceptEdits", "auto", "default", "dontAsk", "plan")
+        if self.agent_permission_mode not in valid_permission_modes:
+            raise ValueError(f"Invalid agent_permission_mode: {self.agent_permission_mode}. Must be one of {valid_permission_modes}.")
+        if self.agent_permission_mode == "bypassPermissions":
+            raise ValueError("bypassPermissions is not allowed. Use acceptEdits or auto instead.")

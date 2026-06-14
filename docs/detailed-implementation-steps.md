@@ -10,6 +10,26 @@
 4. Agent 每一步写 Markdown 文件，不要求输出 JSON 给脚本解析。
 5. 所有路径、字段名、目录名以当前工作区真实数据为准。
 
+## 0.1 分析模式
+
+当前实现需要同时维护两种分析模式：
+
+| 模式 | 配置 | 核心实现 |
+|------|------|----------|
+| Prompt Analysis Mode | `ANALYSIS_MODE=prompt` 或 `--analysis-mode prompt` | `Analyzer`、`prompts.py`、`LLMClient` |
+| Agent Analysis Mode | `ANALYSIS_MODE=agent` 或 `--analysis-mode agent` | `AgentAnalyzer`、`AgentRunner`、`ClaudeCodeCliRunner`、`agent_prompts.py` |
+
+Agent 模式的硬约束：
+
+1. 第一版 backend 只允许 `claude_code_cli`。
+2. 正式输出仍沿用现有 4 个 step 文件和 `final_case_summary.md`。
+3. `agent_trace/` 仅作为辅助记录，不参与 `summary.csv` 和正式统计。
+4. Agent 在 `worktrees/{project}_{canonical_id}_agent_intro/` 中工作。
+5. Agent 只允许读取当前 worktree、当前任务数据目录和当前任务 output 上下文。
+6. 禁止修改源码仓库；一旦 worktree dirty，任务必须失败。
+7. Agent 模式不支持 `--offline`。
+8. 同 project 串行，多 project 可并行。
+
 ## 0. 目标交付物
 
 最终应生成以下代码和文档：
@@ -24,6 +44,9 @@ ai_vuln/
 ├── repo_manager.py
 ├── evidence_builder.py
 ├── analyzer.py
+├── agent_analyzer.py
+├── agent_runner.py
+├── agent_prompts.py
 ├── output_writer.py
 ├── state_manager.py
 ├── prompts.py
@@ -33,7 +56,9 @@ ai_vuln/
 ├── project-module-types.md
 ├── docs/
 │   ├── implementation-plan.md
-│   └── detailed-implementation-steps.md
+│   ├── detailed-implementation-steps.md
+│   ├── project-workflow.md
+│   └── agent-mode-implementation-plan.md
 ├── vuln-analyzed-0605.xlsx
 ├── ai-vulns-timeline.zip
 ├── data/
@@ -107,6 +132,10 @@ class Config:
     offline: bool = False
     max_workers: int = 1
     llm_provider: str = "none"  # none | anthropic | claude_code
+    analysis_mode: str = "prompt"  # prompt | agent
+    agent_backend: str = "claude_code_cli"
+    agent_command: str = "claude"
+    agent_timeout_seconds: int = 1800
 ```
 
 验收标准：
@@ -114,6 +143,7 @@ class Config:
 1. 所有模块只从 `Config` 读取路径。
 2. 支持命令行覆盖 `max_tasks/dry_run/offline/max_workers`。
 3. Step 2 模块分类必须从 `Config.module_types_prompt_path` 读取 `project-module-types.md`，不要在代码中手写另一套 taxonomy。
+4. Agent 模式配置必须支持 `ANALYSIS_MODE`、`AGENT_BACKEND`、`AGENT_COMMAND`、`AGENT_TIMEOUT_SECONDS`。
 
 ### 1.4 编写 `dataset_preparer.py`
 

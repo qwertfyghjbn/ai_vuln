@@ -6,7 +6,25 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
 
 项目处理约 3,365 个漏洞任务，数据来源为 Excel 任务表和预计算的时间线/SAST 数据包。
 
-## 2. 整体数据流
+## 2. 分析模式
+
+项目当前支持两种分析模式，通过 `ANALYSIS_MODE` 或 `python3 main.py run --analysis-mode ...` 切换：
+
+| 模式 | 入口 | 行为 |
+|------|------|------|
+| `prompt` | `Analyzer` + `prompts.py` | 程序拼接 prompt，LLM 返回 Markdown，程序写 4 个正式 step 文件 |
+| `agent` | `AgentAnalyzer` + `ClaudeCodeCliRunner` | Agent 在任务专属 worktree 中自主读代码和 git 历史，直接写 4 个正式 step 文件 |
+
+Agent 模式约束：
+
+1. 第一版 backend 仅支持 `claude_code_cli`。
+2. 正式输出仍是现有 4 个 step Markdown 文件和 `final_case_summary.md`。
+3. `agent_trace/` 仅作为辅助记录，不参与 `summary.csv` 和正式统计。
+4. 同 project 串行，多 project 可并行。
+5. Agent 模式不支持 `--offline`。
+6. Agent 只允许读取当前 worktree、当前任务数据目录和当前任务 output 上下文；禁止修改源码仓库，worktree dirty 视为任务失败。
+
+## 3. 整体数据流
 
 ```
 输入数据                    处理流程                      输出结果
@@ -46,17 +64,17 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
        └────────────┘  └────────────┘  └────────────┘
 ```
 
-## 3. 代码文件说明
+## 4. 代码文件说明
 
-### 3.1 核心入口
+### 4.1 核心入口
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | 主入口和 CLI 编排器。定义 10 个子命令，串联所有模块。包含 `TaskRunResult` 数据类、`process_single_task()` 单任务处理函数、`finalize_task_result()` 主线程结果处理函数，支持 `--project-list` 过滤和 `--max-workers` 并行调度 |
-| `config.py` | 配置管理。从 `.env` 文件和环境变量加载 LLM 密钥、路径、模型参数 |
+| `main.py` | 主入口和 CLI 编排器。定义 10 个子命令，串联所有模块。包含 `TaskRunResult` 数据类、`process_single_task()` 单任务处理函数、`finalize_task_result()` 主线程结果处理函数，支持 `--project-list` 过滤、`--max-workers` 并行调度以及 `--analysis-mode` 模式切换 |
+| `config.py` | 配置管理。从 `.env` 文件和环境变量加载 LLM 密钥、路径、模型参数，以及 `ANALYSIS_MODE` / `AGENT_BACKEND` / `AGENT_COMMAND` / `AGENT_TIMEOUT_SECONDS` |
 | `models.py` | 数据模型。定义 `VulnerabilityTask`（任务身份）和 `VulnEvidence`（证据包）两个 dataclass |
 
-### 3.2 数据加载层
+### 4.2 数据加载层
 
 | 文件 | 职责 |
 |------|------|
@@ -65,21 +83,24 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
 | `dataset_preparer.py` | 预检查数据就绪状态。检查 Excel 和 zip 文件是否存在，解压 zip，验证子目录结构 |
 | `evidence_builder.py` | 构建证据包。从数据目录加载 `timeline.json`、`relevance.json`、`one_issue.txt`、`root_cause.md`、`root_cause_zh.md`、`sast_standardized.json` |
 
-### 3.3 代码收集层
+### 4.3 代码收集层
 
 | 文件 | 职责 |
 |------|------|
-| `repo_manager.py` | Git 仓库操作。克隆仓库（`--filter=blob:none` 部分克隆），在特定 commit 创建 worktree，收集 intro/fix diff 和漏洞位置的代码窗口（40 行上下文） |
+| `repo_manager.py` | Git 仓库操作。克隆仓库（`--filter=blob:none` 部分克隆），在特定 commit 创建 worktree，Prompt 模式下收集 intro/fix diff 和漏洞位置的代码窗口；Agent 模式下准备和清理任务专属 intro worktree |
 
-### 3.4 LLM 分析层
+### 4.4 LLM 分析层
 
 | 文件 | 职责 |
 |------|------|
-| `analyzer.py` | 分析编排器。按顺序执行 4 个分析步骤，每步调用 LLM 并校验输出格式，失败时重试一次，仍失败则写入可解析的 stub |
+| `analyzer.py` | Prompt 模式分析编排器。按顺序执行 4 个分析步骤，每步调用 LLM 并校验输出格式，失败时重试一次，仍失败则写入可解析的 stub |
+| `agent_analyzer.py` | Agent 模式分析编排器。逐步调用 `AgentRunner`，让 Agent 直接写 step 文件，校验失败时 repair 一次，再失败写 stub |
+| `agent_runner.py` | Agent 执行抽象层。当前实现 `ClaudeCodeCliRunner`，负责 Claude CLI 命令构造、权限目录传递和 `agent_trace` 写入 |
+| `agent_prompts.py` | Agent 模式 prompt 构建器。注入任务身份、worktree、数据文件、前一步 step 文件和输出文件路径 |
 | `prompts.py` | Prompt 模板。构建 4 个 prompt，注入漏洞信息、时间线、根因、SAST 数据、代码证据和模块分类体系 |
 | `llm_client.py` | 多供应商 LLM 客户端。支持 `none`（占位符）、`anthropic`、`openai`、`deepseek`（Anthropic 兼容）、`custom`（OpenAI 兼容） |
 
-### 3.5 输出层
+### 4.5 输出层
 
 | 文件 | 职责 |
 |------|------|
@@ -87,7 +108,7 @@ AI-VulnAtlas 是一个 AI 驱动的漏洞自动化分析系统，用于分析 AI
 | `markdown_parser.py` | Markdown 字段提取引擎。提取 `- key: value` 格式的字段值，按枚举归一化，提供每步解析器和 `parse_task_output()` 函数 |
 | `state_manager.py` | 进度追踪。通过 `state/progress.jsonl` 记录任务状态（running/success/failed），支持去重和 `--force` 重跑 |
 
-## 4. CLI 命令说明
+## 5. CLI 命令说明
 
 ```bash
 python3 main.py <command> [options]
@@ -101,7 +122,7 @@ python3 main.py <command> [options]
 | `dry-run` | 使用占位内容生成输出目录 | `--max` |
 | `build-evidence` | 为指定任务构建证据包 | `--project`, `--id` |
 | `collect-code` | 为指定任务收集代码证据 | `--project`, `--id` |
-| `run` | 运行完整分析流程 | `--max`, `--offline`, `--project`, `--id`, `--force`, `--project-list`, `--max-workers` |
+| `run` | 运行完整分析流程 | `--max`, `--offline`, `--project`, `--id`, `--force`, `--project-list`, `--max-workers`, `--analysis-mode`, `--agent-backend`, `--agent-command` |
 | `rebuild-summary` | 从输出文件重建 summary.csv | — |
 | `batch-report` | 生成批量统计报告 | — |
 | `audit-output` | 输出质量审计 | — |

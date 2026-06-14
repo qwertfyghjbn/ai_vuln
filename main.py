@@ -15,6 +15,8 @@ from output_writer import OutputWriter
 from evidence_builder import EvidenceBuilder
 from repo_manager import RepoManager
 from analyzer import Analyzer
+from agent_analyzer import AgentAnalyzer
+from agent_runner import ClaudeCodeCliRunner
 from markdown_parser import parse_task_output, parse_metadata
 
 
@@ -42,7 +44,13 @@ def process_single_task(config: Config, task: "VulnerabilityTask") -> TaskRunRes
     builder = EvidenceBuilder(config)
     repo_manager = RepoManager(config)
     writer = OutputWriter(config)
-    analyzer = Analyzer(config, writer)
+
+    # §10.1: Select analyzer based on analysis_mode
+    if config.analysis_mode == "agent":
+        runner = ClaudeCodeCliRunner(config)
+        analyzer = AgentAnalyzer(config, writer, repo_manager, runner)
+    else:
+        analyzer = Analyzer(config, writer)
 
     try:
         # Resolve directories
@@ -57,12 +65,18 @@ def process_single_task(config: Config, task: "VulnerabilityTask") -> TaskRunRes
         evidence = builder.build(task)
         writer.write_evidence_bundle(evidence)
 
-        # Collect code evidence (if not offline)
-        if not config.offline and evidence.intro_commit:
-            logging.info(f"Collecting code evidence for {task.task_key}")
-            print(f"  Collecting code evidence...")
-            repo_manager.collect_evidence(evidence)
-            writer.write_evidence_bundle(evidence)
+        # §10.2: Code evidence collection branch by analysis_mode
+        if config.analysis_mode == "prompt":
+            if not config.offline and evidence.intro_commit:
+                logging.info(f"Collecting code evidence for {task.task_key}")
+                print(f"  Collecting code evidence...")
+                repo_manager.collect_evidence(evidence)
+                writer.write_evidence_bundle(evidence)
+        elif config.analysis_mode == "agent":
+            if config.offline:
+                return TaskRunResult(task, "failed", "FAIL_AGENT_OFFLINE_UNSUPPORTED",
+                                     "Agent mode does not support --offline in v1.")
+            # Agent mode: skip collect_evidence; AgentAnalyzer handles prepare_agent_workspace internally
 
         # Run analysis
         logging.info(f"Running analysis for {task.task_key}")
@@ -389,6 +403,11 @@ def cmd_run(config: Config, max_tasks: int | None = None, offline: bool = False,
 
     if offline:
         config.offline = True
+
+    # Agent mode does not support --offline in v1
+    if config.analysis_mode == "agent" and config.offline:
+        print("Error: Agent mode does not support --offline in v1.")
+        sys.exit(1)
 
     logging.info(f"Starting run: max_tasks={max_tasks}, offline={offline}, project={project}, id={vuln_id}, force={force}, project_list={project_list}")
 
@@ -896,6 +915,11 @@ def main():
     run_parser.add_argument("--id", help="Specific CVE/GHSA ID to analyze")
     run_parser.add_argument("--force", action="store_true", help="Force re-run completed tasks")
     run_parser.add_argument("--project-list", help="Comma-separated project name whitelist")
+    run_parser.add_argument("--analysis-mode", choices=["prompt", "agent"], help="Analysis mode: prompt or agent")
+    run_parser.add_argument("--agent-backend", help="Agent backend (default: claude_code_cli)")
+    run_parser.add_argument("--agent-command", help="Agent CLI command (default: claude)")
+    run_parser.add_argument("--agent-permission-mode", choices=["acceptEdits", "auto", "default", "dontAsk", "plan"],
+                            help="Agent permission mode (default: acceptEdits)")
 
     # Rebuild summary command
     rebuild_parser = subparsers.add_parser("rebuild-summary", help="Rebuild summary.csv")
@@ -915,6 +939,31 @@ def main():
         config.offline = args.offline
     if hasattr(args, "max_workers") and args.max_workers:
         config.max_workers = args.max_workers
+
+    # Apply agent mode CLI overrides (higher priority than .env and Config defaults)
+    if hasattr(args, "analysis_mode") and args.analysis_mode:
+        config.analysis_mode = args.analysis_mode
+    if hasattr(args, "agent_backend") and args.agent_backend:
+        config.agent_backend = args.agent_backend
+    if hasattr(args, "agent_command") and args.agent_command:
+        config.agent_command = args.agent_command
+    if hasattr(args, "agent_permission_mode") and args.agent_permission_mode:
+        config.agent_permission_mode = args.agent_permission_mode
+
+    # Validate agent mode settings after CLI overrides
+    if config.analysis_mode not in ("prompt", "agent"):
+        print(f"Error: Invalid analysis_mode: {config.analysis_mode}. Must be 'prompt' or 'agent'.")
+        sys.exit(1)
+    if config.analysis_mode == "agent" and config.agent_backend != "claude_code_cli":
+        print(f"Error: Unsupported agent backend: {config.agent_backend}")
+        sys.exit(1)
+    valid_permission_modes = ("acceptEdits", "auto", "default", "dontAsk", "plan")
+    if config.agent_permission_mode not in valid_permission_modes:
+        print(f"Error: Invalid agent_permission_mode: {config.agent_permission_mode}. Must be one of {valid_permission_modes}.")
+        sys.exit(1)
+    if config.agent_permission_mode == "bypassPermissions":
+        print("Error: bypassPermissions is not allowed. Use acceptEdits or auto instead.")
+        sys.exit(1)
 
     # Setup logging
     setup_logging(config)

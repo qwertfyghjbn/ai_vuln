@@ -27,7 +27,47 @@ proposal.docx
 docs/implementation-plan.md
 docs/detailed-implementation-steps.md
 docs/fix-plan-after-phase0-9-audit.md
+docs/agent-mode-implementation-plan.md
 ```
+
+## 分析模式
+
+项目支持两种分析模式，通过 `ANALYSIS_MODE` 或 `--analysis-mode` 切换：
+
+### Prompt Analysis Mode（默认）
+
+系统拼接 prompt，LLM 返回 Markdown，程序写 step 文件。
+
+```bash
+python3 main.py run --analysis-mode prompt
+```
+
+### Agent Analysis Mode
+
+Agent 在任务专属 worktree 中自主读代码、查 git 历史，直接写 step 文件。
+
+```bash
+python3 main.py run --analysis-mode agent --agent-backend claude_code_cli
+```
+
+Agent 模式配置（`.env`）：
+
+```env
+ANALYSIS_MODE=prompt
+AGENT_BACKEND=claude_code_cli
+AGENT_COMMAND=claude
+AGENT_TIMEOUT_SECONDS=1800
+```
+
+Agent 模式约束：
+- Agent 在 `worktrees/{project}_{canonical_id}_agent_intro/` 中工作
+- Agent 可使用 Read/Grep/Glob 和 git show/diff/log
+- Agent 只能写入 `output/{project}/{canonical_id}/` 目录
+- 禁止 agent 修改源码仓库（worktree dirty 会使 task 失败）
+- 每步最多执行 2 次（首次 + 1 次 repair）
+- Agent trace 记录在 `output/{project}/{canonical_id}/agent_trace/`
+- Agent 模式不支持 `--offline`
+- 同 project 串行，多 project 可并行
 
 ## 模型分工建议
 

@@ -36,6 +36,110 @@ LEAKAGE_PATTERNS = [
 ]
 
 
+def validate_step_output(step_name: str, text: str) -> bool:
+    """Validate LLM/agent output for a step. Returns True if valid."""
+    if not text or not text.strip():
+        logger.warning(f"Validation failed for {step_name}: empty output")
+        return False
+
+    # Check for prompt leakage
+    for pattern in LEAKAGE_PATTERNS:
+        if pattern in text:
+            logger.warning(f"Validation failed for {step_name}: found leakage pattern '{pattern}'")
+            return False
+
+    # Check for required fields first - if all required fields are present,
+    # the output is valid even if it starts with a step header
+    required = REQUIRED_FIELDS.get(step_name, [])
+    all_fields_present = True
+    for field in required:
+        value = extract_bullet_value(text, field)
+        if not value:
+            all_fields_present = False
+            logger.warning(f"Validation failed for {step_name}: missing required field '{field}'")
+            return False
+
+    # If all required fields are present, check for prompt echo
+    # Only reject if the output starts with step header AND looks like a pure prompt echo
+    # (i.e., the output is very short or doesn't contain meaningful analysis content)
+    if all_fields_present:
+        step_headers = {
+            "step1": "# Step 1:",
+            "step2": "# Step 2:",
+            "step3": "# Step 3:",
+            "step4": "# Step 4:",
+        }
+        if step_name in step_headers and text.strip().startswith(step_headers[step_name]):
+            # Check if this is just a prompt echo (very short content after header)
+            # If the output has substantial content beyond the header, it's valid
+            lines_after_header = text.strip().split('\n')[1:]
+            non_empty_lines = [l for l in lines_after_header if l.strip()]
+            if len(non_empty_lines) < 3:
+                logger.warning(f"Validation failed for {step_name}: output appears to be prompt echo")
+                return False
+
+    return True
+
+
+def invalid_output_stub(step_name: str) -> str:
+    """Generate a stub output with parseable fields when output is invalid."""
+    if step_name == "step1":
+        return """## Conclusion
+- intro_time_verdict: not_verifiable
+- vuln_exists_at_intro_version: insufficient_evidence
+- manual_review_needed: yes
+
+## Failure
+- reason: LLM output did not satisfy required format after retry
+"""
+    elif step_name == "step2":
+        return """## Project Architecture
+- architecture_type: insufficient_evidence
+- architecture_confidence: low
+
+## Conclusion
+- classification_type: uncertain_existing_module
+- primary_module: insufficient_evidence
+- secondary_modules: none
+- confidence: low
+
+## Failure
+- reason: LLM output did not satisfy required format after retry
+"""
+    elif step_name == "step3":
+        return """## Conclusion
+- category: insufficient_evidence
+- category_name: insufficient_evidence
+- confidence: low
+
+## Module Context
+- module_from_step2_primary: insufficient_evidence
+- module_from_step2_secondary: none
+- module_from_step2_classification_type: uncertain_existing_module
+
+## Four-Quadrant Fields
+- input_type: insufficient_evidence
+- input_subtype: none
+- mechanism_type: insufficient_evidence
+- mechanism_subtype: none
+- requires_ai_function: uncertain
+- ai_native_subtype: none
+- cross_agent: uncertain
+
+## Failure
+- reason: LLM output did not satisfy required format after retry
+"""
+    elif step_name == "step4":
+        return """## Difficulty
+- difficulty: unknown
+
+## Failure
+- reason: LLM output did not satisfy required format after retry
+"""
+    else:
+        return f"## Failure\n- reason: LLM output did not satisfy required format after retry\n"
+
+
 class Analyzer:
     def __init__(self, config: Config, output_writer: OutputWriter):
         self.config = config
@@ -74,36 +178,7 @@ class Analyzer:
 
     def validate_step_output(self, step_name: str, text: str) -> bool:
         """Validate LLM output for a step. Returns True if valid."""
-        if not text or not text.strip():
-            logger.warning(f"Validation failed for {step_name}: empty output")
-            return False
-
-        # Check for prompt leakage
-        for pattern in LEAKAGE_PATTERNS:
-            if pattern in text:
-                logger.warning(f"Validation failed for {step_name}: found leakage pattern '{pattern}'")
-                return False
-
-        # Check for prompt echo (starts with step header)
-        step_headers = {
-            "step1": "# Step 1:",
-            "step2": "# Step 2:",
-            "step3": "# Step 3:",
-            "step4": "# Step 4:",
-        }
-        if step_name in step_headers and text.strip().startswith(step_headers[step_name]):
-            logger.warning(f"Validation failed for {step_name}: output starts with prompt header")
-            return False
-
-        # Check for required fields
-        required = REQUIRED_FIELDS.get(step_name, [])
-        for field in required:
-            value = extract_bullet_value(text, field)
-            if not value:
-                logger.warning(f"Validation failed for {step_name}: missing required field '{field}'")
-                return False
-
-        return True
+        return validate_step_output(step_name, text)
 
     def _complete_with_validation(self, step_name: str, prompt: str) -> str:
         """Call LLM with validation and retry on failure."""
@@ -118,62 +193,4 @@ class Analyzer:
             return text2
 
         logger.warning(f"Using invalid output stub for {step_name} after retry failure")
-        return self._invalid_output_stub(step_name, text2)
-
-    def _invalid_output_stub(self, step_name: str, failed_text: str) -> str:
-        """Generate a stub output with parseable fields when LLM output is invalid."""
-        if step_name == "step1":
-            return """## Conclusion
-- intro_time_verdict: not_verifiable
-- vuln_exists_at_intro_version: insufficient_evidence
-- manual_review_needed: yes
-
-## Failure
-- reason: LLM output did not satisfy required format after retry
-"""
-        elif step_name == "step2":
-            return """## Project Architecture
-- architecture_type: insufficient_evidence
-- architecture_confidence: low
-
-## Conclusion
-- classification_type: uncertain_existing_module
-- primary_module: insufficient_evidence
-- secondary_modules: none
-- confidence: low
-
-## Failure
-- reason: LLM output did not satisfy required format after retry
-"""
-        elif step_name == "step3":
-            return """## Conclusion
-- category: insufficient_evidence
-- category_name: insufficient_evidence
-- confidence: low
-
-## Module Context
-- module_from_step2_primary: insufficient_evidence
-- module_from_step2_secondary: none
-- module_from_step2_classification_type: uncertain_existing_module
-
-## Four-Quadrant Fields
-- input_type: insufficient_evidence
-- input_subtype: none
-- mechanism_type: insufficient_evidence
-- mechanism_subtype: none
-- requires_ai_function: uncertain
-- ai_native_subtype: none
-- cross_agent: uncertain
-
-## Failure
-- reason: LLM output did not satisfy required format after retry
-"""
-        elif step_name == "step4":
-            return """## Difficulty
-- difficulty: unknown
-
-## Failure
-- reason: LLM output did not satisfy required format after retry
-"""
-        else:
-            return f"## Failure\n- reason: LLM output did not satisfy required format after retry\n"
+        return invalid_output_stub(step_name)

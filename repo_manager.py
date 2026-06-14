@@ -1,8 +1,16 @@
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from config import Config
 from models import VulnerabilityTask, VulnEvidence
+
+
+@dataclass
+class AgentWorkspace:
+    repo_path: Path
+    worktree_path: Path
+    commit: str
 
 
 class RepoManager:
@@ -166,6 +174,67 @@ class RepoManager:
             if worktree:
                 evidence.code_at_intro_parent = self.collect_file_windows(worktree, evidence.vuln_positions)
                 self.remove_worktree(repo_path, worktree)
+
+    def prepare_agent_workspace(self, evidence: VulnEvidence) -> AgentWorkspace | None:
+        """Prepare a worktree for agent mode at intro_commit.
+
+        Returns AgentWorkspace on success, None on failure (sets evidence.fail_code/fail_reason).
+        """
+        task = evidence.task
+
+        # Rule 1: must have intro_commit
+        if not evidence.intro_commit:
+            evidence.fail_code = "FAIL_AGENT_WORKSPACE"
+            evidence.fail_reason = "No introduction commit found for agent workspace"
+            return None
+
+        # Rule 2: ensure repo
+        repo_path = self.ensure_repo(task)
+        if not repo_path:
+            evidence.fail_code = "FAIL_AGENT_WORKSPACE"
+            evidence.fail_reason = "Failed to clone or access repository for agent workspace"
+            return None
+
+        # Rule 3: worktree name
+        worktree_name = f"{task.project}_{task.canonical_id}_agent_intro"
+        worktree_path = self.worktrees_dir / worktree_name
+
+        # Rule 6: if worktree exists, verify HEAD == intro_commit
+        if worktree_path.exists():
+            actual_head = self._get_worktree_head(repo_path, worktree_path)
+            if actual_head == evidence.intro_commit:
+                return AgentWorkspace(
+                    repo_path=repo_path,
+                    worktree_path=worktree_path,
+                    commit=evidence.intro_commit,
+                )
+            # Stale worktree: remove and recreate
+            self.remove_worktree(repo_path, worktree_path)
+
+        # Rule 4: checkout intro_commit
+        worktree = self.create_worktree(repo_path, task, evidence.intro_commit, "agent_intro")
+        if not worktree:
+            evidence.fail_code = "FAIL_AGENT_WORKSPACE"
+            evidence.fail_reason = f"Failed to create worktree at {evidence.intro_commit}"
+            return None
+
+        return AgentWorkspace(
+            repo_path=repo_path,
+            worktree_path=worktree,
+            commit=evidence.intro_commit,
+        )
+
+    def cleanup_agent_workspace(self, workspace: AgentWorkspace) -> None:
+        """Remove the agent worktree."""
+        self.remove_worktree(workspace.repo_path, workspace.worktree_path)
+
+    def _get_worktree_head(self, repo_path: Path, worktree_path: Path) -> str | None:
+        """Get the HEAD commit of a worktree."""
+        try:
+            result = self._run_git(worktree_path, ["rev-parse", "HEAD"])
+            return result.strip()
+        except subprocess.CalledProcessError:
+            return None
 
     def _get_target_paths(self, evidence: VulnEvidence) -> list[str] | None:
         """Get target file paths for diff."""
