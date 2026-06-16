@@ -10,11 +10,15 @@ _Avoid_: workflow, backend, pipeline
 
 **Prompt Analysis Mode**:
 An analysis mode where the system prepares bounded evidence and code excerpts before asking a model to produce each step result.
-_Avoid_: current workflow, old mode
+_Avoid_: workflow mode, old mode
 
 **Agent Analysis Mode**:
 An analysis mode where an agent receives the task context and a prepared repository workspace, then decides which code and git history to inspect before writing each step result.
 _Avoid_: full agent pipeline, Claude mode
+
+**Agent Backend**:
+The execution mechanism used inside Agent Analysis Mode to run an agent implementation. An Agent Backend is not an Analysis Mode.
+_Avoid_: mode, workflow
 
 **Step Result**:
 One of the four structured analysis artifacts produced for a vulnerability task: version verification, module classification, vulnerability pattern classification, or exploit condition summary.
@@ -33,6 +37,10 @@ _Avoid_: repo checkout, working directory
 Dev: Should Agent Analysis Mode replace the current workflow?
 
 Domain expert: No. It is another Analysis Mode. Prompt Analysis Mode remains available, and both modes must produce the same Step Results.
+
+Dev: Are Claude CLI and Claude SDK separate Analysis Modes?
+
+Domain expert: No. They are Agent Backends inside Agent Analysis Mode.
 
 Dev: Can Agent Analysis Mode write phase notes?
 

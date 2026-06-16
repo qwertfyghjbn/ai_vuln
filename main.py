@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COM
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import Config
+from config import Config, SUPPORTED_AGENT_BACKENDS
 from dataset_preparer import DatasetPreparer
 from task_loader import TaskLoader
 from record_resolver import RecordResolver
@@ -16,7 +16,7 @@ from evidence_builder import EvidenceBuilder
 from repo_manager import RepoManager
 from analyzer import Analyzer
 from agent_analyzer import AgentAnalyzer
-from agent_runner import ClaudeCodeCliRunner
+from agent_runner import build_agent_runner
 from markdown_parser import parse_task_output, parse_metadata
 
 
@@ -47,7 +47,7 @@ def process_single_task(config: Config, task: "VulnerabilityTask") -> TaskRunRes
 
     # §10.1: Select analyzer based on analysis_mode
     if config.analysis_mode == "agent":
-        runner = ClaudeCodeCliRunner(config)
+        runner = build_agent_runner(config)
         analyzer = AgentAnalyzer(config, writer, repo_manager, runner)
     else:
         analyzer = Analyzer(config, writer)
@@ -954,7 +954,7 @@ def main():
     if config.analysis_mode not in ("prompt", "agent"):
         print(f"Error: Invalid analysis_mode: {config.analysis_mode}. Must be 'prompt' or 'agent'.")
         sys.exit(1)
-    if config.analysis_mode == "agent" and config.agent_backend != "claude_code_cli":
+    if config.analysis_mode == "agent" and config.agent_backend not in SUPPORTED_AGENT_BACKENDS:
         print(f"Error: Unsupported agent backend: {config.agent_backend}")
         sys.exit(1)
     valid_permission_modes = ("acceptEdits", "auto", "default", "dontAsk", "plan")

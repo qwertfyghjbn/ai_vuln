@@ -179,8 +179,11 @@ class AgentAnalyzer:
         if not result.success and result.fail_reason and "FAIL_AGENT_WRITE_PERMISSION" in (result.fail_reason or ""):
             logger.warning(f"Write permission issue for {task_key} {step_name}: {result.fail_reason}")
 
-        # Try to read the output file written by agent
-        if result.success and output_file.exists():
+        # Try to read the output file written by agent.
+        # The agent may have written a valid file even if the SDK call
+        # later timed out or hit an error (e.g., FAIL_AGENT_SDK_TIMEOUT).
+        # Accept the output if it passes validation regardless of result.success.
+        if output_file.exists():
             text = output_file.read_text(encoding="utf-8")
             if validate_step_output(step_name, text):
                 return text
@@ -206,7 +209,7 @@ class AgentAnalyzer:
         if not result.success and result.fail_reason and "FAIL_AGENT_WRITE_PERMISSION" in (result.fail_reason or ""):
             logger.warning(f"Write permission issue for {task_key} {step_name} (retry): {result.fail_reason}")
 
-        if result.success and output_file.exists():
+        if output_file.exists():
             text = output_file.read_text(encoding="utf-8")
             if validate_step_output(step_name, text):
                 return text

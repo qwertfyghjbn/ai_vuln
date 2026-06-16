@@ -242,8 +242,8 @@ class RepoManager:
 
         # From timeline
         if evidence.timeline:
-            intro = evidence.timeline.get("introduction", {})
-            fix = evidence.timeline.get("fix", {})
+            intro = evidence.timeline.get("introduction") or {}
+            fix = evidence.timeline.get("fix") or {}
             for f in intro.get("files", []):
                 paths.add(f)
             for f in fix.get("files", []):

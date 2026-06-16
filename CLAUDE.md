@@ -20,18 +20,35 @@ python3 main.py run --max 5 --analysis-mode prompt
 
 ### Agent Analysis Mode
 
-Agent 在任务专属 worktree 中自主读代码、查 git 历史，直接写 step 文件。
+Agent 在任务专属 worktree 中自主读代码、查 git 历史，直接写 step 文件。支持两种后端：
 
 ```bash
+# Claude Code CLI 后端（通过子进程调用 claude 命令）
 python3 main.py run --max 5 --analysis-mode agent --agent-backend claude_code_cli
+
+# Claude Agent SDK 后端（通过 claude-agent-sdk Python 包）
+python3 main.py run --max 5 --analysis-mode agent --agent-backend claude_agent_sdk
 ```
 
 Agent 模式特点：
 - Agent 在 `worktrees/{project}_{canonical_id}_agent_intro/` 中工作
-- Agent 可使用 Read/Grep/Glob 和 git show/diff/log
+- Agent 可使用 Read/Grep/Glob 和 Bash（git show/diff/log）
 - Agent 只能写入 `output/{project}/{canonical_id}/` 目录
 - 每步最多执行 2 次（首次 + 1 次 repair）
 - Agent trace 记录在 `output/{project}/{canonical_id}/agent_trace/`
+- 两个 backend 共用同一套 AgentAnalyzer、step prompt、输出校验和失败处理逻辑
+
+### Backend 差异
+
+| 特性 | `claude_code_cli` | `claude_agent_sdk` |
+|------|-------------------|---------------------|
+| 调用方式 | 子进程 `claude -p` | `claude_agent_sdk.query()` |
+| 权限控制 | CLI `--allowedTools Bash(git show*)` | `acceptEdits` 模式 + prompt 指令约束 |
+| 超时控制 | `subprocess.run(timeout=N)` | `anyio.move_on_after(N)` |
+| 工具限制 | CLI 参数 `--allowedTools` | SDK `tools` + `disallowed_tools` |
+| 源码保护 | CLI 参数 `Write(output_dir/**)` | `add_dirs` + worktree dirty 事后检查 |
+
+**SDK backend 已知限制**：`claude-agent-sdk` v0.2.101 的 `wait_for_result_and_end_input()` 在没有 hooks/SDK MCP servers 时立即关闭 stdin，导致 `can_use_tool` 回调无法工作。因此 SDK backend 使用 `permission_mode="acceptEdits"`（自动批准 Bash/Write），不通过 `can_use_tool` 做细粒度权限控制。详见 `docs/claude-agent-sdk-implementation-plan.md` §12。
 
 ## 快速开始
 
@@ -70,9 +87,10 @@ Agent 模式配置：
 
 ```env
 ANALYSIS_MODE=prompt
-AGENT_BACKEND=claude_code_cli
+AGENT_BACKEND=claude_code_cli      # claude_code_cli | claude_agent_sdk
 AGENT_COMMAND=claude
 AGENT_TIMEOUT_SECONDS=1800
+AGENT_PERMISSION_MODE=acceptEdits
 ```
 
 ## 命令列表
@@ -88,6 +106,7 @@ AGENT_TIMEOUT_SECONDS=1800
 | `run` | 运行完整分析流程 |
 | `rebuild-summary` | 从输出重建 summary.csv |
 | `batch-report` | 生成批量统计报告 |
+| `audit-output` | 输出质量审计 |
 
 ## 项目结构
 
@@ -102,7 +121,7 @@ ai_vuln/
 ├── repo_manager.py      # Git 仓库管理 + Agent workspace
 ├── analyzer.py          # Prompt 模式分析编排器
 ├── agent_analyzer.py    # Agent 模式分析编排器
-├── agent_runner.py      # Agent 执行抽象层
+├── agent_runner.py      # Agent 执行抽象层（ClaudeCodeCliRunner + ClaudeAgentSdkRunner）
 ├── agent_prompts.py     # Agent 模式 Prompt 构建器
 ├── prompts.py           # Prompt 模式模板
 ├── llm_client.py        # LLM API 客户端
@@ -142,3 +161,4 @@ ai_vuln/
 - 保留项目名称的原始大小写
 - 支持离线模式用于测试（仅 Prompt 模式）
 - Agent 模式同 project 串行，多 project 可并行
+- Agent 模式支持两种后端：`claude_code_cli`（默认）和 `claude_agent_sdk`

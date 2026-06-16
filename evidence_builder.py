@@ -63,9 +63,9 @@ class EvidenceBuilder:
         if not evidence.timeline:
             return
 
-        intro = evidence.timeline.get("introduction", {})
-        fix = evidence.timeline.get("fix", {})
-        disclosure = evidence.timeline.get("public_disclosure", {})
+        intro = evidence.timeline.get("introduction") or {}
+        fix = evidence.timeline.get("fix") or {}
+        disclosure = evidence.timeline.get("public_disclosure") or {}
 
         evidence.intro_commit = intro.get("commit")
         evidence.intro_date = intro.get("date")

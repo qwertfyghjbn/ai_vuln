@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+SUPPORTED_AGENT_BACKENDS = ("claude_code_cli", "claude_agent_sdk")
+
+
 def load_dotenv(path: Path = Path(".env")) -> dict[str, str]:
     """Load .env file and return key-value pairs."""
     env = {}
@@ -120,7 +123,7 @@ class Config:
         # Validate agent mode settings
         if self.analysis_mode not in ("prompt", "agent"):
             raise ValueError(f"Invalid analysis_mode: {self.analysis_mode}. Must be 'prompt' or 'agent'.")
-        if self.analysis_mode == "agent" and self.agent_backend != "claude_code_cli":
+        if self.analysis_mode == "agent" and self.agent_backend not in SUPPORTED_AGENT_BACKENDS:
             raise ValueError(f"Unsupported agent backend: {self.agent_backend}")
         valid_permission_modes = ("acceptEdits", "auto", "default", "dontAsk", "plan")
         if self.agent_permission_mode not in valid_permission_modes:

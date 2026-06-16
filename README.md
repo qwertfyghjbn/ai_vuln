@@ -15,6 +15,7 @@ pip3 install -r requirements.txt
 - `openpyxl>=3.1.0` — Excel 文件读取
 - `GitPython>=3.1.0` — Git 仓库操作
 - `anthropic>=0.18.0` — LLM API 客户端
+- `claude-agent-sdk` — Claude Agent SDK 后端（可选，仅 agent 模式 SDK 后端需要）
 
 ### 2. 准备数据文件
 
@@ -141,13 +142,45 @@ python3 main.py run --project AstrBotDevs_AstrBot --id CVE-2026-6117
 python3 main.py run [options]
 
 # 参数说明
---max N           # 最多处理 N 个任务
---offline         # 离线模式，不克隆 Git 仓库
---project NAME    # 指定项目名称
---id ID           # 指定漏洞 ID（需配合 --project）
---force           # 强制重跑已完成的任务
---max-workers N   # 最大 worker 数（当前保留，仍按单线程执行）
+--max N              # 最多处理 N 个任务
+--offline            # 离线模式，不克隆 Git 仓库（仅 Prompt 模式）
+--project NAME       # 指定项目名称
+--id ID              # 指定漏洞 ID（需配合 --project）
+--force              # 强制重跑已完成的任务
+--max-workers N      # 最大并发 worker 数（同 project 串行，多 project 可并行）
+--analysis-mode MODE # 分析模式：prompt（默认）| agent
+--agent-backend B    # Agent 后端：claude_code_cli（默认）| claude_agent_sdk
+--project-list LIST  # 逗号分隔的项目白名单
 ```
+
+### 分析模式
+
+项目支持两种分析模式：
+
+**Prompt Analysis Mode（默认）：** 系统拼接 prompt，调用 LLM API，LLM 返回 Markdown，程序写 step 文件。
+
+```bash
+python3 main.py run --max 5 --analysis-mode prompt
+```
+
+**Agent Analysis Mode：** Agent 在任务专属 git worktree 中自主读代码、查 git 历史，直接写 step 文件。支持两种后端：
+
+```bash
+# 使用 Claude Code CLI 后端（通过子进程调用 claude 命令）
+python3 main.py run --max 5 --analysis-mode agent --agent-backend claude_code_cli
+
+# 使用 Claude Agent SDK 后端（通过 claude-agent-sdk Python 包）
+python3 main.py run --max 5 --analysis-mode agent --agent-backend claude_agent_sdk
+```
+
+| 后端 | 说明 | 依赖 |
+|------|------|------|
+| `claude_code_cli` | 通过子进程调用 `claude` CLI 命令，通过 CLI 参数做细粒度权限控制 | 系统安装 `claude` 命令 |
+| `claude_agent_sdk` | 通过 `claude-agent-sdk` Python 包调用，使用 `acceptEdits` 权限模式 | `pip install claude-agent-sdk` |
+
+两个后端共用同一套 Agent 分析编排、step prompt、输出校验和失败处理逻辑，输出格式完全一致。
+
+> **注意**：SDK backend 使用 `acceptEdits` 权限模式（自动批准 Bash/Write），不通过 `can_use_tool` 回调做细粒度权限控制。这是 `claude-agent-sdk` v0.2.101 的已知限制所致（`wait_for_result_and_end_input` 在无 hooks 时过早关闭 stdin，导致 `can_use_tool` 双向控制协议无法工作）。详见 `docs/claude-agent-sdk-implementation-plan.md` §12。
 
 ### 批量运行建议
 
@@ -220,8 +253,11 @@ ai_vuln/
 ├── record_resolver.py         # 数据目录解析
 ├── evidence_builder.py        # 证据包构建
 ├── repo_manager.py            # Git 仓库管理
-├── analyzer.py                # LLM 分析编排
-├── prompts.py                 # Prompt 模板
+├── analyzer.py                # Prompt 模式分析编排器
+├── agent_analyzer.py          # Agent 模式分析编排器
+├── agent_runner.py            # Agent 执行器（CLI + SDK 两种后端）
+├── agent_prompts.py           # Agent 模式 Prompt 模板
+├── prompts.py                 # Prompt 模式模板
 ├── llm_client.py              # LLM API 客户端
 ├── output_writer.py           # 输出文件写入
 ├── state_manager.py           # 进度状态追踪
