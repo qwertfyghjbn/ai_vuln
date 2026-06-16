@@ -424,7 +424,7 @@ python3 main.py batch-report
 4. 10 条 Agent 样本全部跑完后，`audit-output` 通过。
 5. Agent 模式输出可与 `compare_runs/2026-06-14/workflow/` 做有效对比。
 
-## 7. 本次验收结论
+## 7. 本次验收结论（2026-06-14）
 
 截至 2026-06-14，这一版代码的状态是：
 
@@ -432,3 +432,19 @@ python3 main.py batch-report
 2. `agent` 模式未通过真实运行验收。
 3. 阻断点已定位为 **Claude CLI 权限模式未正确配置，导致 agent 有分析结果但不能写正式 step 文件**。
 4. 下一步应由 Mimo 按本文件第 5 节逐项修复，再重新执行 10 条 Agent 验收。
+
+## 8. 后续更新（2026-06-16）
+
+上述阻断点已通过以下两项修复解决：
+
+1. **CLI backend 权限修复**：`agent_runner.py` 中 `_build_command` 添加 `--add-dir` 和 `--permission-mode` 参数，agent 获得正确的文件写入权限。详见 §5 修复方案。
+2. **SDK backend 实现**：新增 `ClaudeAgentSdkRunner`（`agent_runner.py`），绕过 CLI 权限问题。详见 `docs/claude-agent-sdk-implementation-plan.md`。
+
+**SDK backend 小批量验收结果（2026-06-16）**：
+
+- `AstrBotDevs_AstrBot` 全部 9 条任务 + `0xKoda_WireMCP` 1 条任务，**10/10 成功，0 失败**
+- 总 turns: 957，总成本: $16.73
+- `audit-output`: 0 missing files, 0 missing fields, 0 leakage, 0 API errors, 0 JSON output
+- `rebuild-summary` + `batch-report` 正常
+
+**Agent 模式已通过真实运行验收。**

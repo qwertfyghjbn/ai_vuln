@@ -47,7 +47,11 @@ python3 main.py run --analysis-mode prompt
 Agent 在任务专属 worktree 中自主读代码、查 git 历史，直接写 step 文件。
 
 ```bash
+# CLI backend（默认）
 python3 main.py run --analysis-mode agent --agent-backend claude_code_cli
+
+# SDK backend
+python3 main.py run --analysis-mode agent --agent-backend claude_agent_sdk
 ```
 
 Agent 模式配置（`.env`）：

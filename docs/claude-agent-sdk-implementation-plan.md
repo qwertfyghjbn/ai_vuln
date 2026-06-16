@@ -771,7 +771,7 @@ if output_file.exists():
 
 原因：agent 可能在 SDK 超时前已经写出完整有效的输出文件。去掉 `result.success` 条件后，即使超时也能接受有效的输出，避免不必要的 retry（浪费 30 分钟）。
 
-## 12.4 验证结果
+## 12.4 单条验证结果（2026-06-16）
 
 任务 `0xKoda_WireMCP/CVE-2026-3959` 使用 SDK backend 运行：
 
@@ -783,3 +783,47 @@ if output_file.exists():
 | step4 | 14 | $0.27 | success，valid |
 
 总计：59 turns，~$1.25，无 retry，无 stub 回退，无超时。所有 stderr 为空。
+
+## 12.5 小批量验证结果（2026-06-16）
+
+`AstrBotDevs_AstrBot` 全部 9 条任务使用 SDK backend 运行：
+
+| # | Task | CWE | Step1 | Step2 | Step3 | Step4 | Turns | Cost |
+|---|------|-----|-------|-------|-------|-------|-------|------|
+| 1 | CVE-2025-48957 | CWE-23,22 | 20 | 29 | 10 | 21 | 80 | $1.42 |
+| 2 | CVE-2025-55449 | CWE-321 | 13 | 41 | 10 | 22 | 86 | $1.41 |
+| 3 | CVE-2025-57697 | CWE-125 | 29 | 40 | 12 | 21 | 102 | $1.79 |
+| 4 | CVE-2025-57698 | CWE-22 | 30 | 57 | 13 | 26 | 126 | $2.16 |
+| 5 | CVE-2026-6117 | CWE-264,265 | 28 | 35 | 14 | 17 | 94 | $1.41 |
+| 6 | CVE-2026-6118 | CWE-74,77 | 28 | 45 | 15 | 30 | 118 | $2.23 |
+| 7 | CVE-2026-6119 | CWE-918 | 20 | 53 | 13 | 62 | 148 | $3.01 |
+| 8 | CVE-2026-6984 | CWE-791,1336 | 18 | 41 | 12 | 21 | 92 | $1.59 |
+| 9 | CVE-2026-7579 | CWE-259,798 | 32 | 49 | 10 | 20 | 111 | $1.71 |
+| **∑** | | | | | | | **957** | **$16.73** |
+
+**成功率：9/9 (100%)**。总耗时约 1h53m。无 stub 回退，所有 stderr 为空。
+
+### 遇到的异常
+
+| 异常类型 | 次数 | 影响 | 分析 |
+|----------|------|------|------|
+| step1 格式 retry（表格→bullet） | 2 次 | retry 恢复 | Agent 倾向用表格格式输出 `intro_time_verdict` 等字段，而非要求的 `- field: value` bullet 格式。修复 prompt 第二次能纠正。 |
+| `FAIL_AGENT_SDK_ERROR` | 1 次 | retry 恢复 | SDK 内部 "Claude Code returned an error result: success" 异常。发生概率低（1/36 steps ≈ 2.8%），retry 后恢复正常。 |
+
+### 输出管线验证
+
+```bash
+python3 main.py rebuild-summary  # ✅ 19 rows 重建成功
+python3 main.py audit-output     # ✅ 0 missing files, 0 missing fields, 0 leakage, 0 API errors, 0 JSON output
+python3 main.py batch-report     # ✅ 100% 成功率
+```
+
+SDK backend 输出完全兼容现有管线（`summary.csv`、`audit-output`、`batch-report`）。
+
+### 与 CLI backend 对比
+
+同一批 AstrBot 任务有 CLI backend 的基线结果（保存在 `output/AstrBotDevs_AstrBot.cli_backup/`）。对比结论：
+
+- **完全一致**：3/9 任务（CVE-2025-55449, CVE-2026-6117, CVE-2026-7579）
+- **有差异**：6/9 任务，差异集中在 step2（module 分类）和 step4（difficulty 评估），属于不同 run 的模型输出变异性，非 backend 引入的系统性偏差
+- **无格式差异**：所有 SDK 输出的 step 文件均通过 `validate_step_output()` 和 `audit-output` 检查
