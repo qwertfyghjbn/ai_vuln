@@ -72,6 +72,9 @@ def process_single_task(config: Config, task: "VulnerabilityTask") -> TaskRunRes
                 print(f"  Collecting code evidence...")
                 repo_manager.collect_evidence(evidence)
                 writer.write_evidence_bundle(evidence)
+                if evidence.fail_code:
+                    writer.write_failure(task)
+                    return TaskRunResult(task, "failed", evidence.fail_code, evidence.fail_reason)
         elif config.analysis_mode == "agent":
             if config.offline:
                 return TaskRunResult(task, "failed", "FAIL_AGENT_OFFLINE_UNSUPPORTED",

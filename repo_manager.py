@@ -67,7 +67,7 @@ class RepoManager:
                 "worktree", "add", "--detach", str(abs_worktree_path), commit
             ])
             return worktree_path
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return None
 
     def remove_worktree(self, repo_path: Path, worktree_path: Path) -> None:
@@ -92,7 +92,7 @@ class RepoManager:
             if len(result) > 80000:
                 result = result[:80000] + "\n\n... (truncated)"
             return result
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return None
 
     def collect_file_windows(
