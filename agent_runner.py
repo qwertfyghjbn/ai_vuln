@@ -263,6 +263,17 @@ class ClaudeAgentSdkRunner:
                 error_msg = raw
             else:
                 error_msg = f"FAIL_AGENT_SDK_ERROR: {raw}"
+
+            # 将 SDK bundled CLI 的误导性错误消息替换为有意义的描述
+            # SDK 内部 CLI 进程初始化失败时，会返回 is_error=true 但 subtype="success"
+            # 此时 agent 完全未开始工作（stdout=0，无 session_id，无 turns）
+            MISLEADING_ERROR = "Claude Code returned an error result: success"
+            if MISLEADING_ERROR in error_msg:
+                error_msg = (
+                    f"FAIL_AGENT_SDK_ERROR: SDK bundled CLI 进程初始化失败，"
+                    f"agent 未开始工作。可能是 CLI 启动超时或资源不足。"
+                    f"（原始错误: {MISLEADING_ERROR}）"
+                )
             logger.exception(f"{request.task_key} {step}: {error_msg}")
 
             self._write_trace(request, f"{step}_stdout.txt", "")
