@@ -126,6 +126,7 @@ python3 main.py <command> [options]
 | `rebuild-summary` | 从输出文件重建 summary.csv | — |
 | `batch-report` | 生成批量统计报告 | — |
 | `audit-output` | 输出质量审计 | — |
+| `audit-results` | 离线审计 Result Package | `--package-dir`, `--out-dir` |
 
 ### 常用命令示例
 
@@ -158,11 +159,36 @@ python3 main.py run --project-list AstrBotDevs_AstrBot --max-workers 2 --max 5 -
 python3 main.py rebuild-summary
 python3 main.py batch-report
 python3 main.py audit-output
+
+# 离线审计结果包
+python3 main.py audit-results --package-dir result_from_server
 ```
 
-## 5. 并行执行语义
+## 5.1 Result Auditor
 
-### 5.1 `--project-list` 任务过滤
+`audit-results` 是独立于 `audit-output` 的离线审计命令：
+
+```bash
+python3 main.py audit-results --package-dir <result-package-dir> [--out-dir <output-dir>]
+```
+
+语义区别：
+
+- `audit-output`：检查 live output 目录中的 markdown 契约、缺字段、prompt leakage、API error、JSON 输出
+- `audit-results`：检查导出的 Result Package 是否在 task 级别可信，是否存在重复 summary 冲突、证据缺失、summary-step mismatch
+
+输出文件：
+
+```text
+audit_results.csv
+audit_results_report.md
+```
+
+更多实现细节见 [docs/result-auditor.md](/home/lqs/ai_vuln/docs/result-auditor.md:1)。
+
+## 6. 并行执行语义
+
+### 6.1 `--project-list` 任务过滤
 
 `--project-list` 接受逗号分隔的项目名白名单，精确匹配 Excel `project` 字段：
 
@@ -182,7 +208,7 @@ python3 main.py run --project-list AstrBotDevs_AstrBot,0xKoda_WireMCP
 - `--project-list` 中有不存在的项目名 → 报错退出
 - `--project` 不在 `--project-list` 中 → 报错退出
 
-### 5.2 `--max-workers` 并行调度
+### 6.2 `--max-workers` 并行调度
 
 `--max-workers` 控制单进程内的并行 worker 数量（默认 1，即串行）：
 
@@ -204,7 +230,7 @@ python3 main.py run --max-workers 4 --project-list AstrBotDevs_AstrBot,0xKoda_Wi
 - `ThreadPoolExecutor`：线程池执行器，`max_workers <= 1` 时走串行路径
 - `in_flight` dict：保证每个 project 最多 1 个 in-flight future
 
-### 5.3 并发写策略
+### 6.3 并发写策略
 
 并行模式下的文件写入职责：
 

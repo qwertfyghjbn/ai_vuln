@@ -135,6 +135,7 @@ python3 main.py run --project AstrBotDevs_AstrBot --id CVE-2026-6117
 | `rebuild-summary` | 从输出重建 summary.csv | — |
 | `batch-report` | 生成批量统计报告 | — |
 | `audit-output` | 输出质量审计 | — |
+| `audit-results` | 离线审计 Result Package | `--package-dir`, `--out-dir` |
 
 ### run 命令参数
 
@@ -193,8 +194,11 @@ python3 main.py rebuild-summary
 python3 main.py batch-report
 python3 main.py audit-output
 
-# 3. 如果 audit 发现问题，先修复再扩大批量
-# 4. 全量运行前确认 audit 报告中各项指标为 0
+# 3. 审计导出的结果包（离线、按 task 可信度判定）
+python3 main.py audit-results --package-dir result_from_server
+
+# 4. 如果 audit 发现问题，先修复再扩大批量
+# 5. 全量运行前确认 audit-output 报告中各项指标为 0
 ```
 
 ## 输出说明
@@ -217,6 +221,27 @@ output/
 ├── audit_report.md                                        # 质量审计报告
 └── preflight_report.md                                    # 数据就绪检查报告
 ```
+
+### Result Package 离线审计输出
+
+`audit-results` 面向已完成的 **Result Package**，不重新读取 repo、git 历史或 advisory。命令会在结果包根目录，或 `--out-dir` 指定目录下生成：
+
+```text
+audit_results.csv          # 每个 (project, canonical_id) 一行的 task 级审计结果
+audit_results_report.md    # 汇总报告，包含 manual review / conflict / evidence_missing 统计
+```
+
+示例：
+
+```bash
+python3 main.py audit-results --package-dir result_from_server
+python3 main.py audit-results --package-dir output --out-dir /tmp/audit_results
+```
+
+`audit-results` 与 `audit-output` 的区别：
+
+- `audit-output`：检查 live output 目录中的 markdown 契约、缺字段、prompt leakage、API error、JSON 输出
+- `audit-results`：检查离线结果包在 task 级别是否可信，是否存在重复 summary 冲突、证据缺失、summary 与 step 文件不一致等问题
 
 ### 四步分析流程
 
@@ -305,6 +330,20 @@ python3 main.py rebuild-summary
 - **Missing Required Fields**：使用 `--force` 重跑该任务
 - **Prompt Leakage Files**：使用 `--force` 重跑，系统会自动重试并生成格式化 stub
 - **API Error Files**：检查 `.env` 中的 API 配置
+
+### Q: audit-results 和 audit-output 有什么区别？
+
+- `audit-output` 面向当前 `output/` 目录，检查格式完整性和明显坏输出
+- `audit-results` 面向导出的 Result Package，按 `(project, canonical_id)` 去重后做 task 级可信度审计
+
+如果结果包缺 `metadata.md`、`evidence_bundle.md` 或四个 step 文件，`audit-results` 会直接给出 `evidence_missing=yes`，而不是回头读取 repo 补证据
+
+### Q: audit-results 生成了哪些文件？
+
+- `audit_results.csv`：机器可消费的 task 级审计结果
+- `audit_results_report.md`：人工查看的汇总报告
+
+更多实现细节见 [docs/result-auditor.md](/home/lqs/ai_vuln/docs/result-auditor.md:1)。
 
 ### Q: --max-workers 参数为什么没有实际并行？
 

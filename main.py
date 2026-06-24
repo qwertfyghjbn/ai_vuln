@@ -18,6 +18,7 @@ from analyzer import Analyzer
 from agent_analyzer import AgentAnalyzer
 from agent_runner import build_agent_runner
 from markdown_parser import parse_task_output, parse_metadata
+from result_audit import run_audit
 
 
 def parse_project_list(raw: str | None) -> set[str] | None:
@@ -879,6 +880,18 @@ def cmd_audit_output(config: Config):
     print(f"Issues: {len(missing_files)} missing files, {len(missing_required_fields)} missing fields, {len(prompt_leakage_files)} leakage, {len(api_error_files)} API errors, {len(json_output_files)} JSON output")
 
 
+def cmd_audit_results(package_dir: str, out_dir: str | None = None):
+    """Audit an offline Result Package and emit task-level audit outputs."""
+    run = run_audit(package_dir, out_dir)
+    manual_review = sum(1 for item in run.evaluations if item.needs_manual_review)
+    print(f"Audit results saved to {run.audit_results_csv_path}")
+    print(f"Audit report saved to {run.audit_results_report_path}")
+    print(
+        f"Tasks: {len(run.evaluations)}, Manual Review: {manual_review}, "
+        f"Package: {run.package.root_dir}"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI-VulnAtlas Agent")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -932,6 +945,11 @@ def main():
 
     # Audit output command
     audit_parser = subparsers.add_parser("audit-output", help="Audit output quality")
+
+    # Audit results command
+    audit_results_parser = subparsers.add_parser("audit-results", help="Audit an offline result package")
+    audit_results_parser.add_argument("--package-dir", required=True, help="Result package root directory")
+    audit_results_parser.add_argument("--out-dir", help="Directory to write audit_results outputs (default: package root)")
 
     args = parser.parse_args()
 
@@ -1000,6 +1018,8 @@ def main():
         generate_batch_report(config)
     elif args.command == "audit-output":
         cmd_audit_output(config)
+    elif args.command == "audit-results":
+        cmd_audit_results(args.package_dir, getattr(args, "out_dir", None))
     else:
         parser.print_help()
         sys.exit(1)
